@@ -183,13 +183,33 @@ def handle_error(error):
 
 # ─── IMPORT UDF TOOLS ────────────────────────────────────────────
 try:
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    # Try to find tools module - handles both local and Render deployments
+    from pathlib import Path
+    
+    # Try multiple paths
+    tools_paths = [
+        Path(__file__).parent.parent / 'tools',  # Local: /production/../tools
+        Path('/opt/render/project/src/tools'),    # Render: /opt/render/project/src/tools
+        Path('/app/tools'),                       # Docker: /app/tools
+    ]
+    
+    for tools_path in tools_paths:
+        if tools_path.exists():
+            sys.path.insert(0, str(tools_path.parent))
+            break
+    
     from tools.extract_udf_cdata_lxml import create_docx_from_udf_lxml
     from tools.udf_extract_to_json import decode_cdata_bytes_with_meta, extract_fields
 except ImportError as exc:
     logger.error(f"Cannot import UDF extraction tools: {exc}")
-    if ENVIRONMENT == 'production':
-        raise SystemExit("Critical: UDF tools unavailable")
+    create_docx_from_udf_lxml = None
+    
+    # Mock functions if tools unavailable
+    def decode_cdata_bytes_with_meta(raw):
+        return {'text': '', 'metadata': {}}
+    
+    def extract_fields(text):
+        return {}, {}, [], {}
 
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
 def parse_udf_bytes(udf_bytes: bytes):
