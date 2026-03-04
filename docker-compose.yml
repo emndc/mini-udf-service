@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  mini-udf-service:
+    build: .
+    container_name: mini-udf-service
+    ports:
+      - "5055:5055"
+    environment:
+      - FLASK_ENV=production
+      - ENVIRONMENT=production
+    env_file:
+      - .env
+    volumes:
+      - ./logs:/app/logs
+      - ./outputs:/app/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5055/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - mini-udf-net
+
+  # Optional: Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: mini-udf-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      - /etc/letsencrypt:/etc/letsencrypt
+    depends_on:
+      - mini-udf-service
+    restart: unless-stopped
+    networks:
+      - mini-udf-net
+
+networks:
+  mini-udf-net:
+    driver: bridge
+
+# Usage:
+#   docker-compose up -d              # Start services
+#   docker-compose logs -f            # View logs
+#   docker-compose down               # Stop services
+#   docker-compose ps                 # Status

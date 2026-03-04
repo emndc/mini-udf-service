@@ -1,0 +1,19 @@
+Flask==2.3.0
+Flask-CORS==4.0.0
+Flask-Limiter==3.5.0
+werkzeug==2.3.0
+python-dotenv==1.0.0
+psutil==5.9.0
+lxml==4.9.2
+python-docx==0.8.11
+Pillow==10.0.0
+requests==2.31.0
+
+# UDF parsing
+zipfile
+
+# Production deployment
+gunicorn==21.2.0
+
+# Optional: Redis for distributed rate limiting (recommended for production)
+# redis==5.0.1
