@@ -81,6 +81,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
 app.config['PROPAGATE_EXCEPTIONS'] = True
+app.config['JSON_AS_ASCII'] = False  # Enable UTF-8 in JSON responses
 
 # ─── LIMITER ────────────────────────────────────────────────────
 limiter = Limiter(
@@ -258,7 +259,8 @@ def parse_udf_bytes(udf_bytes: bytes):
         with zipfile.ZipFile(io.BytesIO(udf_bytes), 'r') as zf:
             if 'content.xml' not in zf.namelist():
                 raise ValueError('Invalid UDF: content.xml not found')
-            raw = zf.read('content.xml')
+            # Read with explicit UTF-8 encoding
+            raw = zf.read('content.xml').decode('utf-8', errors='replace').encode('utf-8')
     except zipfile.BadZipFile:
         raise ValueError('Invalid file format (not a valid ZIP/UDF)')
     except Exception as exc:
@@ -358,7 +360,10 @@ def parse_udf_endpoint():
 @limiter.limit("10 per minute")
 @require_api_key
 def parse_udf_ui_endpoint():
-    """Parse UDF and return UI-mapped schema"""
+    """Parse UDF and return UI-mapped schema with 'ui' field.
+    
+    Response format: {ui: {...parsed fields...}, mapped: true}
+    """
     if 'file' not in request.files:
         return jsonify({'error': 'file field required'}), 400
     
