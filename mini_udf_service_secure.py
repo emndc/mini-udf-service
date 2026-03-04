@@ -55,18 +55,23 @@ CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(',')
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
 # ─── LOGGING ────────────────────────────────────────────────────
+# Create logs directory first
+Path('logs').mkdir(exist_ok=True)
+
+# Configure logging (stdout for Render, file for local)
+handlers = [logging.StreamHandler()]
+
+try:
+    handlers.append(logging.FileHandler('logs/app.log'))
+except (OSError, PermissionError):
+    pass  # Can't write to file (e.g., Render), use stdout only
+
 logging.basicConfig(
     level=logging.WARNING if ENVIRONMENT == 'production' else logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    handlers=[
-        logging.FileHandler('logs/app.log'),
-        logging.StreamHandler()
-    ]
+    handlers=handlers
 )
 logger = logging.getLogger(__name__)
-
-# Create logs directory
-Path('logs').mkdir(exist_ok=True)
 
 # ─── FLASK APP ───────────────────────────────────────────────────
 app = Flask(__name__)
