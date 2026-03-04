@@ -242,18 +242,16 @@ def _build_replacements(ui: dict) -> dict[str, str]:
     dictionary."""
     # ── Handle nested 'placeholders' structure from frontend ──
     # Frontend may send data nested under 'placeholders' key. Extract it.
-    original_keys = set(ui.keys())
     if 'placeholders' in ui and isinstance(ui.get('placeholders'), dict):
-        logger.info(f'[DEBUG] Found nested "placeholders" section in incoming JSON')
         placeholders_data = ui.pop('placeholders', {})
-        logger.info(f'[DEBUG] Extracted {len(placeholders_data)} items from placeholders: {list(placeholders_data.keys())}')
         # Merge: ui still contains top-level data, but also add from placeholders
         for key, val in placeholders_data.items():
             if key not in ui:  # Don't override existing top-level keys
                 ui[key] = val
-        logger.info(f'[DEBUG] After merge, ui.keys() = {list(ui.keys())}')
-    else:
-        logger.info(f'[DEBUG] No nested "placeholders" found. ui.keys() = {list(ui.keys())}
+    
+    r: dict[str, str] = {}
+
+    def _v(obj, key, default=''):
     
     r: dict[str, str] = {}
 
