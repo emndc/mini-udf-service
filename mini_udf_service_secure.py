@@ -26,7 +26,7 @@ from functools import wraps
 from pathlib import Path
 
 # Third-party imports
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, make_response
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash
@@ -51,7 +51,11 @@ DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
 API_SECRET_KEY = os.getenv('API_SECRET_KEY', '')
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', 50 * 1024 * 1024))  # 50MB
 ALLOWED_EXTENSIONS = {'udf', 'docx'}
-CORS_ORIGINS = os.getenv('CORS_ORIGINS', 'http://localhost:3000').split(',')
+_raw_cors_origins = os.getenv(
+    'CORS_ORIGINS',
+    'http://localhost:3000,http://localhost:5173,https://localhost:5173'
+)
+CORS_ORIGINS = [origin.strip() for origin in _raw_cors_origins.split(',') if origin.strip()]
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
 # ─── LOGGING ────────────────────────────────────────────────────
@@ -101,6 +105,9 @@ def require_api_key(f):
     """Wrapper: Require valid API key in X-API-Key header"""
     @wraps(f)
     def decorated(*args, **kwargs):
+        if request.method == 'OPTIONS':
+            return make_response('', 204)
+
         # GET /health endpoint'inde API key gerekmiyor (monitoring için)
         if request.path == '/health' and request.method == 'GET':
             return f(*args, **kwargs)
