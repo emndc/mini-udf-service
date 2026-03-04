@@ -181,35 +181,52 @@ def handle_error(error):
     # In development, include more details
     return jsonify({'error': str(error)}), 500
 
-# ─── IMPORT UDF TOOLS ────────────────────────────────────────────
-try:
-    # Try to find tools module - handles both local and Render deployments
-    from pathlib import Path
+# ─── IMPORT UDF TOOLS (Lazy loading for Render compatibility) ────────────────────────
+# Don't import at startup - will be lazy loaded when endpoints are called
+# This allows service to at least respond to /health without tools/ folder
+
+_udf_tools_loaded = False
+_udf_tools_available = False
+create_docx_from_udf_lxml = None
+decode_cdata_bytes_with_meta = None
+extract_fields = None
+
+def _load_udf_tools():
+    """Lazy load UDF extraction tools - called on first API request"""
+    global _udf_tools_loaded, _udf_tools_available
+    global create_docx_from_udf_lxml, decode_cdata_bytes_with_meta, extract_fields
     
-    # Try multiple paths
-    tools_paths = [
-        Path(__file__).parent.parent / 'tools',  # Local: /production/../tools
-        Path('/opt/render/project/src/tools'),    # Render: /opt/render/project/src/tools
-        Path('/app/tools'),                       # Docker: /app/tools
-    ]
+    if _udf_tools_loaded:
+        return _udf_tools_available
     
-    for tools_path in tools_paths:
-        if tools_path.exists():
-            sys.path.insert(0, str(tools_path.parent))
-            break
+    try:
+        # Try multiple paths
+        tools_paths = [
+            Path(__file__).parent.parent / 'tools',  # Local
+            Path('/opt/render/project/src/tools'),    # Render
+            Path('/app/tools'),                       # Docker
+        ]
+        
+        for tools_path in tools_paths:
+            if tools_path.exists():
+                sys.path.insert(0, str(tools_path.parent))
+                break
+        
+        from tools.extract_udf_cdata_lxml import create_docx_from_udf_lxml as _cdflu
+        from tools.udf_extract_to_json import decode_cdata_bytes_with_meta as _dcbwm, extract_fields as _ef
+        
+        create_docx_from_udf_lxml = _cdflu
+        decode_cdata_bytes_with_meta = _dcbwm
+        extract_fields = _ef
+        
+        _udf_tools_available = True
+        logger.info("UDF extraction tools loaded successfully")
+    except ImportError as exc:
+        logger.warning(f"UDF tools not available: {exc} - only /health endpoint will work")
+        _udf_tools_available = False
     
-    from tools.extract_udf_cdata_lxml import create_docx_from_udf_lxml
-    from tools.udf_extract_to_json import decode_cdata_bytes_with_meta, extract_fields
-except ImportError as exc:
-    logger.error(f"Cannot import UDF extraction tools: {exc}")
-    create_docx_from_udf_lxml = None
-    
-    # Mock functions if tools unavailable
-    def decode_cdata_bytes_with_meta(raw):
-        return {'text': '', 'metadata': {}}
-    
-    def extract_fields(text):
-        return {}, {}, [], {}
+    _udf_tools_loaded = True
+    return _udf_tools_available
 
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
 def parse_udf_bytes(udf_bytes: bytes):
@@ -223,8 +240,12 @@ def parse_udf_bytes(udf_bytes: bytes):
         dict: {fields, confidences, warnings, validations, metadata}
     
     Raises:
-        ValueError: If parsing fails
+        ValueError: If parsing fails or tools unavailable
     """
+    # Lazy load tools
+    if not _load_udf_tools():
+        raise ValueError('UDF extraction tools not available on this server')
+    
     try:
         with zipfile.ZipFile(io.BytesIO(udf_bytes), 'r') as zf:
             if 'content.xml' not in zf.namelist():
