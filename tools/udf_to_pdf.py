@@ -24,11 +24,12 @@ from reportlab.platypus import Paragraph
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
 
 # ── Font registration & resolution ─────────────────────────────────────
-# Default fallback fonts (built-in to ReportLab)
-FONT_REGULAR = 'Times-Roman'
-FONT_BOLD = 'Times-Bold'
-FONT_ITALIC = 'Times-Italic'
-FONT_BOLD_ITALIC = 'Times-BoldItalic'
+# Default fallback fonts - use built-in fonts with Unicode support
+# Note: Built-in fonts don't support Turkish chars, will be replaced by register_fonts()
+FONT_REGULAR = 'Helvetica'  # Will be overridden by Arial or DejaVu if available
+FONT_BOLD = 'Helvetica-Bold'
+FONT_ITALIC = 'Helvetica-Oblique'
+FONT_BOLD_ITALIC = 'Helvetica-BoldOblique'
 FONT_MONO = 'Courier'
 
 # Registry: family_name -> {regular, bold, italic, bold_italic}
@@ -51,11 +52,15 @@ def _register_one(name: str, path: str) -> bool:
 
 
 def register_fonts():
-    """Register all font families that UDF files may reference."""
+    """Register all font families that UDF files may reference.
+    
+    Supports both Windows and Linux paths for cross-platform compatibility.
+    """
     global FONT_REGULAR, FONT_BOLD, FONT_ITALIC, FONT_BOLD_ITALIC, FONT_MONO
 
     # (family_key, reg, reg_name, bold, bold_name, ital, ital_name, bi, bi_name)
     families = [
+        # Windows paths (for local testing)
         ('Times New Roman',
          'C:/Windows/Fonts/times.ttf',   'TimesNewRoman',
          'C:/Windows/Fonts/timesbd.ttf',  'TimesNewRomanBold',
@@ -66,26 +71,17 @@ def register_fonts():
          'C:/Windows/Fonts/arialbd.ttf',  'ArialBold',
          'C:/Windows/Fonts/ariali.ttf',   'ArialItalic',
          'C:/Windows/Fonts/arialbi.ttf',  'ArialBoldItalic'),
-        ('Bookman Old Style',
-         'C:/Windows/Fonts/BOOKOS.TTF',   'BookmanOldStyle',
-         'C:/Windows/Fonts/BOOKOSB.TTF',  'BookmanOldStyleBold',
-         'C:/Windows/Fonts/BOOKOSI.TTF',  'BookmanOldStyleItalic',
-         'C:/Windows/Fonts/BOOKOSBI.TTF', 'BookmanOldStyleBoldItalic'),
-        ('Candara',
-         'C:/Windows/Fonts/Candara.ttf',  'Candara',
-         'C:/Windows/Fonts/Candarab.ttf', 'CandaraBold',
-         'C:/Windows/Fonts/Candarai.ttf', 'CandaraItalic',
-         'C:/Windows/Fonts/Candaraz.ttf', 'CandaraBoldItalic'),
-        ('Tahoma',
-         'C:/Windows/Fonts/tahoma.ttf',   'Tahoma',
-         'C:/Windows/Fonts/tahomabd.ttf', 'TahomaBold',
-         None,                            None,
-         None,                            None),
-        ('Cambria',
-         'C:/Windows/Fonts/cambria.ttc',  'Cambria',
-         'C:/Windows/Fonts/cambriab.ttf', 'CambriaBold',
-         'C:/Windows/Fonts/cambriai.ttf', 'CambriaItalic',
-         'C:/Windows/Fonts/cambriaz.ttf', 'CambriaBoldItalic'),
+        # Linux paths (Render/Docker)
+        ('DejaVu Sans',
+         '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',        'DejaVuSans',
+         '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',    'DejaVuSansBold',
+         '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf', 'DejaVuSansOblique',
+         '/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf', 'DejaVuSansBoldOblique'),
+        ('Liberation Sans',
+         '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', 'LiberationSans',
+         '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',    'LiberationSansBold',
+         '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',  'LiberationSansItalic',
+         '/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf', 'LiberationSansBoldItalic'),
     ]
 
     for entry in families:
@@ -107,21 +103,16 @@ def register_fonts():
 
         if fam:
             _FONT_FAMILIES[fam_key] = fam
-
-    # Set default globals to Times New Roman if registered
-    tnr = _FONT_FAMILIES.get('Times New Roman', {})
-    if 'regular' in tnr:
-        FONT_REGULAR = tnr['regular']
-    if 'bold' in tnr:
-        FONT_BOLD = tnr['bold']
-    if 'italic' in tnr:
-        FONT_ITALIC = tnr['italic']
-    if 'bold_italic' in tnr:
-        FONT_BOLD_ITALIC = tnr['bold_italic']
-
-    # Consolas for UYAP code
-    if _register_one('Consolas', 'C:/Windows/Fonts/consola.ttf'):
-        FONT_MONO = 'Consolas'
+    
+    # Priority: Try DejaVu Sans → Liberation Sans → Times New Roman
+    for font_family in ['DejaVu Sans', 'Liberation Sans', 'Arial', 'Times New Roman']:
+        fam = _FONT_FAMILIES.get(font_family, {})
+        if 'regular' in fam:
+            FONT_REGULAR = fam['regular']
+            FONT_BOLD = fam.get('bold', FONT_REGULAR)
+            FONT_ITALIC = fam.get('italic', FONT_REGULAR)
+            FONT_BOLD_ITALIC = fam.get('bold_italic', FONT_BOLD)
+            break  # Use first available font family
 
 
 register_fonts()
