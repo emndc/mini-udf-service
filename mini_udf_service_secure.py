@@ -255,6 +255,40 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         from docx import Document
         from reportlab.lib.pagesizes import A4
         from reportlab.pdfgen import canvas
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from pathlib import Path
+        
+        # Font resolution - try to use Turkish-supporting fonts
+        font_name = 'Helvetica'  # Fallback
+        font_bold = 'Helvetica-Bold'
+        
+        # Try Linux fonts (Render)
+        for font_path, name in [
+            ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 'DejaVuSans'),
+            ('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', 'LiberationSans'),
+        ]:
+            if Path(font_path).exists():
+                try:
+                    pdfmetrics.registerFont(TTFont(name, font_path))
+                    font_name = name
+                    break
+                except:
+                    pass
+        
+        # Try Windows fonts (local)
+        for font_path, name in [
+            ('C:/Windows/Fonts/arial.ttf', 'Arial'),
+            ('C:/Windows/Fonts/arialbd.ttf', 'ArialBold'),
+        ]:
+            if Path(font_path).exists():
+                try:
+                    pdfmetrics.registerFont(TTFont(name, font_path))
+                    font_name = 'Arial'
+                    font_bold = 'ArialBold'
+                    break
+                except:
+                    pass
         
         # Parse DOCX
         doc = Document(io.BytesIO(docx_bytes))
@@ -263,8 +297,7 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         buffer = io.BytesIO()
         c = canvas.Canvas(buffer, pagesize=A4)
         
-        # Font selection (Arial-compatible with Turkish support)
-        font_name = FONT_REGULAR  # Will be DejaVu or Liberation Sans
+        # Font settings
         font_size = 11
         line_height = font_size * 1.2
         
