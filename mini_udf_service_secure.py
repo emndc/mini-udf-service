@@ -809,38 +809,16 @@ def generate_udf_endpoint():
 @limiter.limit("10 per minute")
 @require_api_key
 def generate_pdf_endpoint():
-    """Generate filled template rendered as PDF.
-    
-    Accepts JSON body with placeholder data.
-    For direct DOCX→PDF conversion, use /api/preview-docx instead.
+    """Deprecated endpoint kept for backward compatibility.
+
+    PDF generation from form JSON must use two-step flow:
+      1) /api/generate/docx
+      2) /api/preview-docx
     """
-    try:
-        from tools.generate_document import generate_pdf, output_filename
-    except ImportError:
-        return jsonify({'error': 'PDF generation module not available'}), 501
-
-    # Only accept JSON body (not file uploads)
-    ui_json = request.get_json(silent=True)
-    if not ui_json:
-        return jsonify({'error': 'JSON body required. For direct DOCX→PDF use /api/preview-docx, for direct UDF→PDF use /api/preview-udf'}), 400
-
-    template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
-    try:
-        pdf_bytes = generate_pdf(ui_json, template_name=template)
-        fname = output_filename(ui_json, ext='pdf', template_name=template)
-        return Response(
-            pdf_bytes,
-            mimetype='application/pdf',
-            headers={
-                'Content-Disposition': _content_disposition(fname),
-                'X-Filename': fname,
-            },
-        )
-    except FileNotFoundError as exc:
-        return jsonify({'error': str(exc)}), 404
-    except Exception as exc:
-        logger.error(f"PDF generation error: {exc}")
-        return jsonify({'error': str(exc)}), 500
+    return jsonify({
+        'error': 'This endpoint is disabled.',
+        'message': 'Use two-step flow: POST /api/generate/docx then POST /api/preview-docx',
+    }), 410
 
 
 @app.route('/api/fill-docx', methods=['POST'])
