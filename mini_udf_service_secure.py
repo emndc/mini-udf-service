@@ -200,9 +200,10 @@ def _load_udf_tools():
         return _udf_tools_available
     
     try:
-        # Try multiple paths
+        # Try multiple paths (handles local, Render, Docker deployments)
         tools_paths = [
-            Path(__file__).parent.parent / 'tools',  # Local
+            Path(__file__).parent / 'tools',          # Local: production/tools
+            Path(__file__).parent.parent / 'tools',   # Local: /tools (if run from parent)
             Path('/opt/render/project/src/tools'),    # Render
             Path('/app/tools'),                       # Docker
         ]
