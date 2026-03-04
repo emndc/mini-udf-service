@@ -747,9 +747,10 @@ def generate_docx_endpoint():
     except ImportError:
         return jsonify({'error': 'DOCX generation module not available'}), 501
 
-    ui_json, err = _extract_placeholders(request)
-    if err:
-        return jsonify({'error': err[0]}), err[1]
+    # Only accept JSON body
+    ui_json = request.get_json(silent=True)
+    if not ui_json:
+        return jsonify({'error': 'JSON body required'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
@@ -780,9 +781,10 @@ def generate_udf_endpoint():
     except ImportError:
         return jsonify({'error': 'UDF generation module not available'}), 501
 
-    ui_json, err = _extract_placeholders(request)
-    if err:
-        return jsonify({'error': err[0]}), err[1]
+    # Only accept JSON body
+    ui_json = request.get_json(silent=True)
+    if not ui_json:
+        return jsonify({'error': 'JSON body required'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
@@ -807,15 +809,20 @@ def generate_udf_endpoint():
 @limiter.limit("10 per minute")
 @require_api_key
 def generate_pdf_endpoint():
-    """Generate filled template rendered as PDF."""
+    """Generate filled template rendered as PDF.
+    
+    Accepts JSON body with placeholder data.
+    For direct DOCX→PDF conversion, use /api/preview-docx instead.
+    """
     try:
         from tools.generate_document import generate_pdf, output_filename
     except ImportError:
         return jsonify({'error': 'PDF generation module not available'}), 501
 
-    ui_json, err = _extract_placeholders(request)
-    if err:
-        return jsonify({'error': err[0]}), err[1]
+    # Only accept JSON body (not file uploads)
+    ui_json = request.get_json(silent=True)
+    if not ui_json:
+        return jsonify({'error': 'JSON body required (or use /api/preview-docx for direct file conversion)'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
