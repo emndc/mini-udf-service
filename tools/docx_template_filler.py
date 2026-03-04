@@ -240,6 +240,16 @@ def _format_date(val: str) -> str:
 def _build_replacements(ui: dict) -> dict[str, str]:
     """Convert the structured UI JSON into a flat ``{#placeholder: value}``
     dictionary."""
+    # ── Handle nested 'placeholders' structure from frontend ──
+    # Frontend may send data nested under 'placeholders' key. Extract it.
+    if 'placeholders' in ui and isinstance(ui.get('placeholders'), dict):
+        # Merge placeholders content into main dict, placeholders sub-items override
+        placeholders_data = ui.pop('placeholders', {})
+        # Merge: ui still contains top-level data, but also add from placeholders
+        for key, val in placeholders_data.items():
+            if key not in ui:  # Don't override existing top-level keys
+                ui[key] = val
+    
     r: dict[str, str] = {}
 
     def _v(obj, key, default=''):
