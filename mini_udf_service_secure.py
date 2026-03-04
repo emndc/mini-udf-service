@@ -96,14 +96,31 @@ CORS(
     app,
     origins=CORS_ORIGINS,
     expose_headers=['Content-Disposition', 'X-Filename'],
-    allow_headers=['Content-Type', 'X-API-Key', 'X-CSRF-Token'],
+    allow_headers=['Content-Type', 'X-API-Key', 'X-CSRF-Token', 'Authorization'],
     methods=['GET', 'POST', 'OPTIONS'],
     max_age=3600
 )
 
 # ─── SECURITY: API KEY VALIDATION ──────────────────────────────
+def _is_valid_api_key(token: str) -> bool:
+    """Validate provided token against API_SECRET_KEY (plain or hashed)."""
+    if not token or not API_SECRET_KEY:
+        return False
+
+    if token == API_SECRET_KEY:
+        return True
+
+    try:
+        if API_SECRET_KEY.startswith(('pbkdf2:', 'scrypt:', 'argon2:')):
+            return check_password_hash(API_SECRET_KEY, token)
+    except Exception:
+        return False
+
+    return False
+
+
 def require_api_key(f):
-    """Wrapper: Require valid API key in X-API-Key header"""
+    """Wrapper: Require valid API key in X-API-Key or Authorization: Bearer."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if request.method == 'OPTIONS':
@@ -114,13 +131,17 @@ def require_api_key(f):
             return f(*args, **kwargs)
         
         token = request.headers.get('X-API-Key', '').strip()
+        if not token:
+            auth_header = request.headers.get('Authorization', '').strip()
+            if auth_header.lower().startswith('bearer '):
+                token = auth_header[7:].strip()
         
         if ENVIRONMENT == 'production' and not API_SECRET_KEY:
             logger.error("API_SECRET_KEY not set in production mode!")
             return jsonify({'error': 'Server misconfigured'}), 500
         
-        if not token or token != API_SECRET_KEY:
-            logger.warning(f"Unauthorized API attempt from {request.remote_addr}")
+        if not _is_valid_api_key(token):
+            logger.warning(f"Unauthorized API attempt from {request.remote_addr} on {request.path}")
             return jsonify({'error': 'Unauthorized'}), 401
         
         return f(*args, **kwargs)
