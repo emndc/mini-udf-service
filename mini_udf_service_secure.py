@@ -750,7 +750,7 @@ def generate_docx_endpoint():
     # Only accept JSON body
     ui_json = request.get_json(silent=True)
     if not ui_json:
-        return jsonify({'error': 'JSON body required'}), 400
+        return jsonify({'error': 'JSON body required. For direct DOCX→PDF from uploaded file, use /api/preview-docx'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
@@ -784,7 +784,7 @@ def generate_udf_endpoint():
     # Only accept JSON body
     ui_json = request.get_json(silent=True)
     if not ui_json:
-        return jsonify({'error': 'JSON body required'}), 400
+        return jsonify({'error': 'JSON body required. For direct UDF→PDF from uploaded file, use /api/preview-udf'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
@@ -822,7 +822,7 @@ def generate_pdf_endpoint():
     # Only accept JSON body (not file uploads)
     ui_json = request.get_json(silent=True)
     if not ui_json:
-        return jsonify({'error': 'JSON body required (or use /api/preview-docx for direct file conversion)'}), 400
+        return jsonify({'error': 'JSON body required. For direct DOCX→PDF use /api/preview-docx, for direct UDF→PDF use /api/preview-udf'}), 400
 
     template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
     try:
