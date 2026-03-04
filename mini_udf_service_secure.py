@@ -238,6 +238,118 @@ def _load_udf_tools():
     return _udf_tools_available
 
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
+def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
+    """
+    Convert DOCX file to PDF using ReportLab with Turkish font support.
+    
+    Args:
+        docx_bytes: Raw DOCX file bytes
+    
+    Returns:
+        bytes: PDF file data
+    
+    Raises:
+        ValueError: If DOCX parsing fails
+    """
+    try:
+        from docx import Document
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+        
+        # Parse DOCX
+        doc = Document(io.BytesIO(docx_bytes))
+        
+        # Create PDF
+        buffer = io.BytesIO()
+        c = canvas.Canvas(buffer, pagesize=A4)
+        
+        # Font selection (Arial-compatible with Turkish support)
+        font_name = FONT_REGULAR  # Will be DejaVu or Liberation Sans
+        font_size = 11
+        line_height = font_size * 1.2
+        
+        # Page dimensions
+        page_width, page_height = A4
+        margin_left = 40
+        margin_right = 40
+        margin_top = 50
+        y = page_height - margin_top
+        
+        # Extract and render paragraphs
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                y -= line_height * 0.5
+                continue
+            
+            # Check for bold (simple detection from runs)
+            is_bold = False
+            for run in para.runs:
+                if run.bold:
+                    is_bold = True
+                    break
+            
+            # Select appropriate font
+            if is_bold:
+                current_font = FONT_BOLD
+            else:
+                current_font = FONT_REGULAR
+            
+            c.setFont(current_font, font_size)
+            
+            # Wrap text to fit page width
+            max_width = page_width - margin_left - margin_right
+            wrapped_lines = _wrap_text_simple(text, max_width, current_font, font_size)
+            
+            # Draw wrapped lines
+            for line in wrapped_lines:
+                if y < margin_top + 50:
+                    c.showPage()
+                    y = page_height - margin_top
+                
+                c.drawString(margin_left, y, line)
+                y -= line_height
+        
+        # Finalize PDF
+        c.save()
+        return buffer.getvalue()
+        
+    except Exception as exc:
+        logger.error(f"DOCX to PDF conversion error: {exc}")
+        raise ValueError(f'Failed to convert DOCX: {str(exc)[:100]}')
+
+
+def _wrap_text_simple(text: str, max_width: float, font_name: str, font_size: int, 
+                     word_split=False) -> list:
+    """Simple word-wrap text to fit within max_width."""
+    from reportlab.pdfgen import canvas as canvas_module
+    
+    # Create a dummy canvas to measure text
+    dummy = io.BytesIO()
+    c = canvas_module.Canvas(dummy)
+    c.setFont(font_name, font_size)
+    
+    words = text.split()
+    lines = []
+    current_line = ""
+    
+    for word in words:
+        test_line = (current_line + " " + word).strip()
+        width = c.stringWidth(test_line, font_name, font_size)
+        
+        if width > max_width:
+            if current_line:
+                lines.append(current_line)
+            current_line = word
+        else:
+            current_line = test_line
+    
+    if current_line:
+        lines.append(current_line)
+    
+    return lines if lines else [text[:50]]
+
+
 def parse_udf_bytes(udf_bytes: bytes):
     """
     Parse UDF file and extract fields.
@@ -434,6 +546,45 @@ def preview_udf_endpoint():
     except Exception as exc:
         logger.error(f"Preview PDF generation failed: {exc}")
         return jsonify({'error': 'PDF oluşturulamadı'}), 500
+
+
+@app.route('/api/preview-docx', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def preview_docx_endpoint():
+    """Generate PDF from uploaded DOCX file.
+    
+    Uses DejaVu Sans / Liberation Sans fonts (Arial-compatible, Turkish support).
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'file field required'}), 400
+
+    try:
+        _, _ = validate_file_upload(request.files['file'])
+    except ValueError as e:
+        return jsonify({'error': f'Invalid file: {str(e)}'}), 400
+
+    try:
+        file_data = request.files['file'].read(MAX_FILE_SIZE + 1)
+        if len(file_data) > MAX_FILE_SIZE:
+            return jsonify({'error': 'File size exceeds limit'}), 413
+    except Exception as e:
+        logger.error(f"DOCX file read error: {e}")
+        return jsonify({'error': 'Failed to read file'}), 400
+
+    try:
+        pdf_bytes = docx_to_pdf_bytes(file_data)
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={'Content-Disposition': 'inline; filename=preview.pdf'}
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as exc:
+        logger.error(f"DOCX to PDF conversion failed: {exc}")
+        return jsonify({'error': 'PDF oluşturulamadı'}), 500
+
 
 @app.route('/api/health-detailed', methods=['GET'])
 def health_detailed():
