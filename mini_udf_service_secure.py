@@ -656,6 +656,53 @@ def health_detailed():
     return _check()
 
 
+@app.route('/api/debug/logs', methods=['GET'])
+@require_api_key
+def debug_logs():
+    """Retrieve debug log files from outputs/ directory.
+    
+    Query params:
+      - filename: return specific file (blank = list all)
+    """
+    outputs_dir = Path(__file__).resolve().parent / 'outputs'
+    if not outputs_dir.exists():
+        return jsonify({'error': 'No outputs directory', 'files': []}), 200
+    
+    filename = request.args.get('filename', '').strip()
+    
+    if filename:
+        # Return specific file
+        file_path = outputs_dir / filename
+        if not file_path.exists() or not file_path.is_file():
+            return jsonify({'error': f'File not found: {filename}'}), 404
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return jsonify({
+                'filename': filename,
+                'content': content,
+                'size': file_path.stat().st_size
+            }), 200
+        except Exception as e:
+            logger.error(f"Debug log read error: {e}")
+            return jsonify({'error': str(e)}), 500
+    
+    # List all JSON files
+    try:
+        files = []
+        for f in sorted(outputs_dir.glob('*.json'), key=lambda x: x.stat().st_mtime, reverse=True)[:20]:
+            files.append({
+                'filename': f.name,
+                'size': f.stat().st_size,
+                'mtime': f.stat().st_mtime
+            })
+        return jsonify({'files': files}), 200
+    except Exception as e:
+        logger.error(f"Debug log list error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 # ─── DOCUMENT GENERATION HELPERS ────────────────────────────────
 def _content_disposition(filename: str) -> str:
     """Return safe Content-Disposition header."""
