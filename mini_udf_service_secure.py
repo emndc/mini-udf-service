@@ -634,6 +634,178 @@ def health_detailed():
         }), 200
     return _check()
 
+
+# ─── DOCUMENT GENERATION HELPERS ────────────────────────────────
+def _content_disposition(filename: str) -> str:
+    """Return safe Content-Disposition header."""
+    from urllib.parse import quote
+    safe_name = quote(filename, safe='')
+    return f'attachment; filename="{safe_name}"'
+
+
+def _extract_placeholders(req):
+    """Extract JSON body from request - either direct JSON or from file upload."""
+    # Try JSON body first
+    ui_json = req.get_json(silent=True)
+    if ui_json:
+        return ui_json, None
+    
+    # Try file upload (multipart/form-data)
+    if 'file' in req.files:
+        try:
+            file_data = req.files['file'].read(MAX_FILE_SIZE + 1)
+            if len(file_data) > MAX_FILE_SIZE:
+                return None, ('File too large', 413)
+            # Parse UDF → extract → map to UI schema
+            parsed = parse_udf_bytes(file_data)
+            ui_json = parsed  # Simplified: return raw parsed result
+            return ui_json, None
+        except ValueError as e:
+            return None, (f'File parse error: {str(e)}', 400)
+        except Exception as e:
+            return None, (f'Error: {str(e)}', 500)
+    
+    return None, ('JSON body or file upload required', 400)
+
+
+# ─── DOCUMENT GENERATION ENDPOINTS ────────────────────────────────
+@app.route('/api/generate/docx', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def generate_docx_endpoint():
+    """Generate filled DOCX template from UI JSON."""
+    try:
+        from tools.generate_document import generate_docx, output_filename
+    except ImportError:
+        return jsonify({'error': 'DOCX generation module not available'}), 501
+
+    ui_json, err = _extract_placeholders(request)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+
+    template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
+    try:
+        docx_bytes = generate_docx(ui_json, template_name=template)
+        fname = output_filename(ui_json, ext='docx', template_name=template)
+        return Response(
+            docx_bytes,
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            headers={
+                'Content-Disposition': _content_disposition(fname),
+                'X-Filename': fname,
+            },
+        )
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except Exception as exc:
+        logger.error(f"DOCX generation error: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/generate/udf', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def generate_udf_endpoint():
+    """Generate filled template converted to UDF format."""
+    try:
+        from tools.generate_document import generate_udf, output_filename
+    except ImportError:
+        return jsonify({'error': 'UDF generation module not available'}), 501
+
+    ui_json, err = _extract_placeholders(request)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+
+    template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
+    try:
+        udf_bytes = generate_udf(ui_json, template_name=template)
+        fname = output_filename(ui_json, ext='udf', template_name=template)
+        return Response(
+            udf_bytes,
+            mimetype='application/octet-stream',
+            headers={
+                'Content-Disposition': _content_disposition(fname),
+                'X-Filename': fname,
+            },
+        )
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except Exception as exc:
+        logger.error(f"UDF generation error: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/generate/pdf', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def generate_pdf_endpoint():
+    """Generate filled template rendered as PDF."""
+    try:
+        from tools.generate_document import generate_pdf, output_filename
+    except ImportError:
+        return jsonify({'error': 'PDF generation module not available'}), 501
+
+    ui_json, err = _extract_placeholders(request)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+
+    template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
+    try:
+        pdf_bytes = generate_pdf(ui_json, template_name=template)
+        fname = output_filename(ui_json, ext='pdf', template_name=template)
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': _content_disposition(fname),
+                'X-Filename': fname,
+            },
+        )
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except Exception as exc:
+        logger.error(f"PDF generation error: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/fill-docx', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def fill_docx_endpoint():
+    """Fill a DOCX template with placeholder values from UI JSON."""
+    try:
+        from tools.docx_template_filler import fill_template, generate_output_filename
+    except ImportError:
+        return jsonify({'error': 'DOCX template filler module not available'}), 501
+
+    ui_json = request.get_json(silent=True)
+    if not ui_json:
+        return jsonify({'error': 'JSON body required'}), 400
+
+    template = request.args.get('template', 'AnlasmaBelgesi-#Dolu_v1.docx')
+    out_format = request.args.get('format', 'docx')
+
+    try:
+        docx_bytes = fill_template(ui_json, template_name=template)
+        filename = generate_output_filename(ui_json, template_name=template.rsplit('.', 1)[0])
+
+        if out_format == 'docx':
+            return Response(
+                docx_bytes,
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                headers={
+                    'Content-Disposition': _content_disposition(filename),
+                    'X-Filename': filename,
+                }
+            )
+        else:
+            return jsonify({'error': f'Unsupported format: {out_format}'}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except Exception as exc:
+        logger.error(f"DOCX fill error: {exc}")
+        return jsonify({'error': str(exc)}), 500
+
 # ─── CLI MODE ─────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
