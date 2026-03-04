@@ -324,9 +324,9 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
             
             # Select appropriate font
             if is_bold:
-                current_font = FONT_BOLD
+                current_font = font_bold
             else:
-                current_font = FONT_REGULAR
+                current_font = font_name
             
             c.setFont(current_font, font_size)
             
