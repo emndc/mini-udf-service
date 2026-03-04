@@ -4,6 +4,8 @@
 Usage:
     from tools.docx_template_filler import fill_template
     docx_bytes = fill_template(ui_json, template_name="AnlasmaBelgesi-#Dolu_v1.docx")
+
+Version: 2.1 (fixed nested placeholders extraction)
 """
 import copy
 import io
