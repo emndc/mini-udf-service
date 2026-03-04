@@ -281,6 +281,26 @@ def parse_udf_bytes(udf_bytes: bytes):
         logger.error(f"Field extraction error: {exc}")
         raise ValueError(f'Failed to extract fields: {str(exc)[:100]}')
 
+
+_pdf_generator_cls = None
+
+
+def _load_pdf_generator_cls():
+    """Lazy load PDF generator class from tools package."""
+    global _pdf_generator_cls
+    if _pdf_generator_cls is not None:
+        return _pdf_generator_cls
+
+    try:
+        # Ensure tools path is available
+        _load_udf_tools()
+        from tools.udf_to_pdf import UYAPPDFGenerator
+        _pdf_generator_cls = UYAPPDFGenerator
+        return _pdf_generator_cls
+    except Exception as exc:
+        logger.error(f"PDF generator import failed: {exc}")
+        return None
+
 # ─── ENDPOINTS ──────────────────────────────────────────────────────
 
 @app.route('/health', methods=['GET'])
@@ -357,6 +377,58 @@ def parse_udf_ui_endpoint():
         return jsonify({'ui': parsed, 'mapped': True}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/preview-udf', methods=['POST'])
+@limiter.limit("10 per minute")
+@require_api_key
+def preview_udf_endpoint():
+    """Generate preview PDF from uploaded UDF.
+
+    Query params:
+      mode=birebir (default) | structured
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'file field required'}), 400
+
+    try:
+        _, _ = validate_file_upload(request.files['file'])
+    except ValueError as e:
+        return jsonify({'error': f'Invalid file: {str(e)}'}), 400
+
+    try:
+        file_data = request.files['file'].read(MAX_FILE_SIZE + 1)
+        if len(file_data) > MAX_FILE_SIZE:
+            return jsonify({'error': 'File size exceeds limit'}), 413
+    except Exception as e:
+        logger.error(f"Preview file read error: {e}")
+        return jsonify({'error': 'Failed to read file'}), 400
+
+    try:
+        parsed = parse_udf_bytes(file_data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    mode = (request.args.get('mode', 'birebir') or 'birebir').strip().lower()
+    generator_cls = _load_pdf_generator_cls()
+    if generator_cls is None:
+        return jsonify({'error': 'PDF preview module unavailable on server'}), 500
+
+    try:
+        generator = generator_cls()
+        if mode == 'structured':
+            pdf_bytes = generator.create_pdf(parsed)
+        else:
+            pdf_bytes = generator.create_pdf_birebir(parsed, udf_bytes=file_data)
+
+        return Response(
+            pdf_bytes,
+            mimetype='application/pdf',
+            headers={'Content-Disposition': 'inline; filename=preview.pdf'}
+        )
+    except Exception as exc:
+        logger.error(f"Preview PDF generation failed: {exc}")
+        return jsonify({'error': 'PDF oluşturulamadı'}), 500
 
 @app.route('/api/health-detailed', methods=['GET'])
 def health_detailed():
