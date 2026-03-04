@@ -252,10 +252,6 @@ def _build_replacements(ui: dict) -> dict[str, str]:
     r: dict[str, str] = {}
 
     def _v(obj, key, default=''):
-    
-    r: dict[str, str] = {}
-
-    def _v(obj, key, default=''):
         """Safely get a string value.  Also handles ``{deger: …}`` dicts
         produced by ``map_to_ui_schema``."""
         if obj is None:
