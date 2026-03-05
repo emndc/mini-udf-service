@@ -261,7 +261,9 @@ def _load_udf_tools():
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
 def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     """
-    Convert DOCX file to PDF using ReportLab with Turkish font support.
+    Convert DOCX file to PDF using LibreOffice (Render) or fallback methods.
+    
+    Preserves tables, formatting, headers, footers - better than ReportLab.
     
     Args:
         docx_bytes: Raw DOCX file bytes
@@ -270,110 +272,92 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         bytes: PDF file data
     
     Raises:
-        ValueError: If DOCX parsing fails
+        ValueError: If DOCX conversion fails
     """
+    import tempfile
+    import subprocess
+    import shutil
+    from pathlib import Path
+    
     try:
-        from docx import Document
-        from reportlab.lib.pagesizes import A4
-        from reportlab.pdfgen import canvas
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-        from pathlib import Path
-        
-        # Font resolution - try to use Turkish-supporting fonts
-        font_name = 'Helvetica'  # Fallback
-        font_bold = 'Helvetica-Bold'
-        
-        # Try Linux fonts (Render)
-        for font_path, name in [
-            ('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 'DejaVuSans'),
-            ('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', 'LiberationSans'),
-        ]:
-            if Path(font_path).exists():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = os.path.join(tmpdir, 'input.docx')
+            pdf_path = os.path.join(tmpdir, 'input.pdf')
+            
+            # Write DOCX to temp file
+            with open(docx_path, 'wb') as f:
+                f.write(docx_bytes)
+            
+            # Try LibreOffice first (Render production)
+            soffice = shutil.which('soffice')
+            if soffice:
                 try:
-                    pdfmetrics.registerFont(TTFont(name, font_path))
-                    font_name = name
-                    break
-                except:
-                    pass
-        
-        # Try Windows fonts (local)
-        for font_path, name in [
-            ('C:/Windows/Fonts/arial.ttf', 'Arial'),
-            ('C:/Windows/Fonts/arialbd.ttf', 'ArialBold'),
-        ]:
-            if Path(font_path).exists():
-                try:
-                    pdfmetrics.registerFont(TTFont(name, font_path))
-                    font_name = 'Arial'
-                    font_bold = 'ArialBold'
-                    break
-                except:
-                    pass
-        
-        # Parse DOCX
-        doc = Document(io.BytesIO(docx_bytes))
-        
-        # Create PDF
-        buffer = io.BytesIO()
-        c = canvas.Canvas(buffer, pagesize=A4)
-        
-        # Font settings
-        font_size = 11
-        line_height = font_size * 1.2
-        
-        # Page dimensions
-        page_width, page_height = A4
-        margin_left = 40
-        margin_right = 40
-        margin_top = 50
-        y = page_height - margin_top
-        
-        # Extract and render paragraphs
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                y -= line_height * 0.5
-                continue
+                    result = subprocess.run(
+                        [soffice, '--headless', '--convert-to', 'pdf',
+                         '--outdir', tmpdir, docx_path],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=30
+                    )
+                    if os.path.exists(pdf_path):
+                        logger.info(f'LibreOffice conversion succeeded, PDF size: {os.path.getsize(pdf_path)}')
+                        return Path(pdf_path).read_bytes()
+                except Exception as exc:
+                    logger.warning(f'LibreOffice conversion failed: {exc}')
             
-            # Check for bold (simple detection from runs)
-            is_bold = False
-            for run in para.runs:
-                if run.bold:
-                    is_bold = True
-                    break
-            
-            # Select appropriate font
-            if is_bold:
-                current_font = font_bold
-            else:
-                current_font = font_name
-            
-            c.setFont(current_font, font_size)
-            
-            # Wrap text to fit page width
-            max_width = page_width - margin_left - margin_right
-            wrapped_lines = _wrap_text_simple(text, max_width, current_font, font_size)
-            
-            # Draw wrapped lines
-            for line in wrapped_lines:
-                if y < margin_top + 50:
-                    c.showPage()
-                    y = page_height - margin_top
-                
-                c.drawString(margin_left, y, line)
-                y -= line_height
-        
-        # Finalize PDF
-        c.save()
-        return buffer.getvalue()
-        
+            # Fallback: Try DOCX→UDF→PDF (UYAP style)
+            logger.info('Falling back to UDF→PDF conversion')
+            return _docx_to_pdf_via_udf(docx_bytes)
+    
     except Exception as exc:
         logger.error(f"DOCX to PDF conversion error: {exc}")
         raise ValueError(f'Failed to convert DOCX: {str(exc)[:100]}')
 
 
-def _wrap_text_simple(text: str, max_width: float, font_name: str, font_size: int, 
+def _docx_to_pdf_via_udf(docx_bytes: bytes) -> bytes:
+    """Fallback: Convert DOCX→UDF→PDF using UYAP PDF generator."""
+    import io
+    import zipfile
+    try:
+        # Convert DOCX → UDF
+        from docx import Document
+        doc = Document(io.BytesIO(docx_bytes))
+        
+        # Extract text for UDF content (simplified)
+        paragraphs = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if text:
+                paragraphs.append(text)
+        
+        # Generate UDF-like structure
+        from tools.udf_to_pdf import UYAPPDFGenerator
+        from tools.udf_extract_to_json import decode_cdata_bytes_with_meta
+        
+        # Create minimal UDF bytes with content
+        content_xml = f'<?xml version="1.0" encoding="UTF-8"?><Document><Content><![CDATA[{"\\n".join(paragraphs)}]]></Content></Document>'
+        
+        udf_buffer = io.BytesIO()
+        with zipfile.ZipFile(udf_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('content.xml', content_xml.encode('utf-8'))
+        udf_bytes = udf_buffer.getvalue()
+        
+        # Parse and generate PDF
+        meta = decode_cdata_bytes_with_meta(content_xml.encode('utf-8'))
+        parsed = {
+            'fields': {},
+            'confidences': {},
+            'warnings': [],
+            'validations': [],
+            'metadata': meta,
+        }
+        generator = UYAPPDFGenerator()
+        return generator.create_pdf_birebir(parsed, udf_bytes=udf_bytes)
+    
+    except Exception as exc:
+        logger.error(f"UDF fallback conversion failed: {exc}")
+        raise ValueError(f'PDF conversion failed: {str(exc)[:100]}') 
                      word_split=False) -> list:
     """Simple word-wrap text to fit within max_width."""
     from reportlab.pdfgen import canvas as canvas_module
@@ -608,18 +592,22 @@ def preview_udf_endpoint():
 def preview_docx_endpoint():
     """Generate PDF from uploaded DOCX file.
     
-    Uses DejaVu Sans / Liberation Sans fonts (Arial-compatible, Turkish support).
+    Uses LibreOffice (Render) for high-quality conversion preserving tables, formatting, etc.
+    Falls back to UDF→PDF if LibreOffice unavailable.
     """
     if 'file' not in request.files:
         return jsonify({'error': 'file field required'}), 400
 
+    file_obj = request.files['file']
+    original_filename = file_obj.filename or 'document.docx'
+    
     try:
-        _, _ = validate_file_upload(request.files['file'])
+        _, _ = validate_file_upload(file_obj)
     except ValueError as e:
         return jsonify({'error': f'Invalid file: {str(e)}'}), 400
 
     try:
-        file_data = request.files['file'].read(MAX_FILE_SIZE + 1)
+        file_data = file_obj.read(MAX_FILE_SIZE + 1)
         if len(file_data) > MAX_FILE_SIZE:
             return jsonify({'error': 'File size exceeds limit'}), 413
     except Exception as e:
@@ -628,10 +616,17 @@ def preview_docx_endpoint():
 
     try:
         pdf_bytes = docx_to_pdf_bytes(file_data)
+        
+        # Build proper filename from original DOCX filename
+        pdf_filename = original_filename.rsplit('.', 1)[0] + '.pdf'
+        
         return Response(
             pdf_bytes,
             mimetype='application/pdf',
-            headers={'Content-Disposition': 'inline; filename=preview.pdf'}
+            headers={
+                'Content-Disposition': f'inline; filename="{pdf_filename}"',
+                'X-Filename': pdf_filename,
+            }
         )
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
