@@ -548,7 +548,7 @@ def _load_pdf_generator_cls():
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint (no auth required)"""
-    return jsonify({'status': 'ok', 'service': 'mini-udf-service', 'version': '2.1-mammoth'}), 200
+    return jsonify({'status': 'ok', 'service': 'mini-udf-service', 'version': '2.2-dejavu'}), 200
 
 
 @app.route('/diagnostic/libreoffice', methods=['GET'])
