@@ -357,35 +357,7 @@ def _docx_to_pdf_via_udf(docx_bytes: bytes) -> bytes:
     
     except Exception as exc:
         logger.error(f"UDF fallback conversion failed: {exc}")
-        raise ValueError(f'PDF conversion failed: {str(exc)[:100]}') 
-                     word_split=False) -> list:
-    """Simple word-wrap text to fit within max_width."""
-    from reportlab.pdfgen import canvas as canvas_module
-    
-    # Create a dummy canvas to measure text
-    dummy = io.BytesIO()
-    c = canvas_module.Canvas(dummy)
-    c.setFont(font_name, font_size)
-    
-    words = text.split()
-    lines = []
-    current_line = ""
-    
-    for word in words:
-        test_line = (current_line + " " + word).strip()
-        width = c.stringWidth(test_line, font_name, font_size)
-        
-        if width > max_width:
-            if current_line:
-                lines.append(current_line)
-            current_line = word
-        else:
-            current_line = test_line
-    
-    if current_line:
-        lines.append(current_line)
-    
-    return lines if lines else [text[:50]]
+        raise ValueError(f'PDF conversion failed: {str(exc)[:100]}')
 
 
 def parse_udf_bytes(udf_bytes: bytes):
