@@ -261,9 +261,12 @@ def _load_udf_tools():
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
 def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     """
-    Convert DOCX file to PDF using LibreOffice (Render) or fallback methods.
+    Convert DOCX file to PDF using mammoth (DOCX→HTML) + xhtml2pdf (HTML→PDF).
     
-    Preserves tables, formatting, headers, footers - better than ReportLab.
+    Pure Python solution - no system dependencies needed.
+    Preserves tables, formatting, bold/italic text.
+    
+    Falls back to LibreOffice (if available) or UDF→PDF as last resort.
     
     Args:
         docx_bytes: Raw DOCX file bytes
@@ -274,57 +277,127 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     Raises:
         ValueError: If DOCX conversion fails
     """
-    import tempfile
-    import subprocess
-    import shutil
-    from pathlib import Path
+    import io as _io
     
+    # ── Method 1: mammoth + xhtml2pdf (primary, pure Python) ──
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            docx_path = os.path.join(tmpdir, 'input.docx')
-            pdf_path = os.path.join(tmpdir, 'input.pdf')
-            
-            # Write DOCX to temp file
-            with open(docx_path, 'wb') as f:
-                f.write(docx_bytes)
-            
-            # Try LibreOffice first (Render production)
-            soffice = shutil.which('soffice')
-            if soffice:
-                logger.info(f'Found soffice at: {soffice}')
-                try:
-                    logger.info(f'Running LibreOffice conversion: {docx_path} → {pdf_path}')
-                    result = subprocess.run(
-                        [soffice, '--headless', '--convert-to', 'pdf',
-                         '--outdir', tmpdir, docx_path],
-                        check=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=30
-                    )
-                    logger.info(f'LibreOffice exit code: {result.returncode}')
-                    logger.info(f'LibreOffice stdout: {result.stdout.decode("utf-8", errors="ignore")}')
-                    if result.stderr:
-                        logger.warning(f'LibreOffice stderr: {result.stderr.decode("utf-8", errors="ignore")}')
-                    
-                    if os.path.exists(pdf_path):
-                        pdf_size = os.path.getsize(pdf_path)
-                        logger.info(f'✅ LibreOffice conversion succeeded, PDF size: {pdf_size} bytes')
-                        return Path(pdf_path).read_bytes()
-                    else:
-                        logger.warning(f'LibreOffice ran but output PDF not found at: {pdf_path}')
-                except subprocess.TimeoutExpired as timeout_exc:
-                    logger.error(f'LibreOffice conversion timeout: {timeout_exc}')
-                except Exception as exc:
-                    logger.error(f'LibreOffice conversion exception: {type(exc).__name__}: {exc}')
-            
-            # Fallback: Try DOCX→UDF→PDF (UYAP style)
-            logger.info('Falling back to UDF→PDF conversion')
-            return _docx_to_pdf_via_udf(docx_bytes)
+        import mammoth
+        from xhtml2pdf import pisa
+        
+        logger.info('Converting DOCX→HTML via mammoth...')
+        result = mammoth.convert_to_html(_io.BytesIO(docx_bytes))
+        html_body = result.value
+        
+        if result.messages:
+            for msg in result.messages[:5]:
+                logger.info(f'mammoth message: {msg}')
+        
+        # Wrap with proper HTML structure and CSS for Turkish text & tables
+        full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+    @page {{
+        size: A4;
+        margin: 2cm;
+    }}
+    body {{
+        font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif;
+        font-size: 11pt;
+        line-height: 1.4;
+        color: #000;
+    }}
+    table {{
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8pt 0;
+    }}
+    td, th {{
+        border: 1px solid #333;
+        padding: 4pt 6pt;
+        text-align: left;
+        vertical-align: top;
+        font-size: 10pt;
+    }}
+    th {{
+        background-color: #f0f0f0;
+        font-weight: bold;
+    }}
+    h1 {{ font-size: 16pt; margin: 12pt 0 6pt 0; }}
+    h2 {{ font-size: 14pt; margin: 10pt 0 5pt 0; }}
+    h3 {{ font-size: 12pt; margin: 8pt 0 4pt 0; }}
+    p {{ margin: 3pt 0; }}
+    strong {{ font-weight: bold; }}
+    em {{ font-style: italic; }}
+</style>
+</head>
+<body>
+{html_body}
+</body>
+</html>"""
+        
+        logger.info(f'HTML size: {len(full_html)} chars, converting to PDF via xhtml2pdf...')
+        
+        pdf_buffer = _io.BytesIO()
+        pisa_status = pisa.CreatePDF(
+            full_html,
+            dest=pdf_buffer,
+            encoding='utf-8'
+        )
+        
+        if pisa_status.err:
+            logger.warning(f'xhtml2pdf had errors: {pisa_status.err}')
+        
+        pdf_bytes = pdf_buffer.getvalue()
+        logger.info(f'mammoth+xhtml2pdf conversion succeeded, PDF size: {len(pdf_bytes)} bytes')
+        
+        if len(pdf_bytes) > 500:
+            return pdf_bytes
+        else:
+            logger.warning('xhtml2pdf produced empty/tiny PDF, trying fallback...')
     
+    except ImportError as imp_err:
+        logger.warning(f'mammoth/xhtml2pdf not available: {imp_err}')
     except Exception as exc:
-        logger.error(f"DOCX to PDF conversion error: {exc}")
-        raise ValueError(f'Failed to convert DOCX: {str(exc)[:100]}')
+        logger.error(f'mammoth+xhtml2pdf conversion failed: {type(exc).__name__}: {exc}')
+    
+    # ── Method 2: LibreOffice (if installed) ──
+    try:
+        import tempfile
+        import subprocess
+        import shutil
+        from pathlib import Path
+        
+        soffice = shutil.which('soffice')
+        if soffice:
+            logger.info(f'Trying LibreOffice at: {soffice}')
+            with tempfile.TemporaryDirectory() as tmpdir:
+                docx_path = os.path.join(tmpdir, 'input.docx')
+                pdf_path = os.path.join(tmpdir, 'input.pdf')
+                
+                with open(docx_path, 'wb') as f:
+                    f.write(docx_bytes)
+                
+                result = subprocess.run(
+                    [soffice, '--headless', '--convert-to', 'pdf',
+                     '--outdir', tmpdir, docx_path],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30
+                )
+                
+                if os.path.exists(pdf_path):
+                    pdf_bytes = Path(pdf_path).read_bytes()
+                    logger.info(f'LibreOffice conversion succeeded, PDF size: {len(pdf_bytes)} bytes')
+                    return pdf_bytes
+    except Exception as exc:
+        logger.warning(f'LibreOffice fallback failed: {exc}')
+    
+    # ── Method 3: UDF→PDF (last resort) ──
+    logger.info('Falling back to UDF→PDF conversion')
+    return _docx_to_pdf_via_udf(docx_bytes)
 
 
 def _docx_to_pdf_via_udf(docx_bytes: bytes) -> bytes:
