@@ -444,6 +444,39 @@ def health():
     """Health check endpoint (no auth required)"""
     return jsonify({'status': 'ok', 'service': 'mini-udf-service', 'version': '2.0'}), 200
 
+
+@app.route('/diagnostic/libreoffice', methods=['GET'])
+@require_api_key
+def diagnostic_libreoffice():
+    """Diagnostic endpoint to check LibreOffice availability and status."""
+    import shutil
+    import subprocess
+    
+    info = {}
+    
+    # Check if LibreOffice is available
+    soffice = shutil.which('soffice')
+    info['soffice_path'] = soffice
+    info['soffice_available'] = soffice is not None
+    
+    if soffice:
+        # Try to get version
+        try:
+            result = subprocess.run(
+                [soffice, '--version'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            info['soffice_version'] = result.stdout.strip()
+            info['soffice_version_error'] = result.stderr.strip() if result.stderr else None
+        except Exception as exc:
+            info['soffice_version'] = None
+            info['soffice_version_error'] = str(exc)
+    
+    return jsonify(info), 200
+
+
 @app.route('/api/parse-udf', methods=['POST'])
 @limiter.limit("10 per minute")
 @require_api_key
