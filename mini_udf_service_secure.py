@@ -265,6 +265,7 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     
     Pure Python solution - no system dependencies needed.
     Preserves tables, formatting, bold/italic text.
+    Uses DejaVu Sans font for full Turkish character support.
     
     Falls back to LibreOffice (if available) or UDF→PDF as last resort.
     
@@ -283,6 +284,38 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     try:
         import mammoth
         from xhtml2pdf import pisa
+        import xhtml2pdf.default
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.fonts import addMapping as rl_addMapping
+        
+        # Register DejaVu Sans with ReportLab (Turkish character support)
+        _fonts_dir = Path(__file__).resolve().parent / 'fonts'
+        _font_regular = _fonts_dir / 'DejaVuSans.ttf'
+        _font_bold = _fonts_dir / 'DejaVuSans-Bold.ttf'
+        
+        if _font_regular.exists() and _font_bold.exists():
+            try:
+                pdfmetrics.registerFont(TTFont('DejaVuSans', str(_font_regular)))
+                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', str(_font_bold)))
+                rl_addMapping('DejaVuSans', 0, 0, 'DejaVuSans')
+                rl_addMapping('DejaVuSans', 1, 0, 'DejaVuSans-Bold')
+                rl_addMapping('DejaVuSans', 0, 1, 'DejaVuSans')
+                rl_addMapping('DejaVuSans', 1, 1, 'DejaVuSans-Bold')
+                # Override xhtml2pdf default font mappings
+                for key in ('helvetica', 'helvetica-bold', 'arial', 'sans',
+                            'sansserif', 'serif', 'times', 'times-roman',
+                            'times-bold', 'verdana', 'geneva'):
+                    if 'bold' in key:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'DejaVuSans-Bold'
+                    else:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'DejaVuSans'
+                xhtml2pdf.default.DEFAULT_FONT['dejavusans'] = 'DejaVuSans'
+                logger.info(f'DejaVu Sans fonts registered from {_fonts_dir}')
+            except Exception as font_exc:
+                logger.warning(f'Font registration failed (may already be registered): {font_exc}')
+        else:
+            logger.warning(f'DejaVu Sans fonts not found at {_fonts_dir}')
         
         logger.info('Converting DOCX→HTML via mammoth...')
         result = mammoth.convert_to_html(_io.BytesIO(docx_bytes))
@@ -303,7 +336,7 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         margin: 2cm;
     }}
     body {{
-        font-family: "DejaVu Sans", "Helvetica", "Arial", sans-serif;
+        font-family: "DejaVuSans", "Helvetica", "Arial", sans-serif;
         font-size: 11pt;
         line-height: 1.4;
         color: #000;
@@ -367,7 +400,6 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         import tempfile
         import subprocess
         import shutil
-        from pathlib import Path
         
         soffice = shutil.which('soffice')
         if soffice:
