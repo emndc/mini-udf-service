@@ -258,6 +258,269 @@ def _load_udf_tools():
     _udf_tools_loaded = True
     return _udf_tools_available
 
+
+# ─── LAYOUT-PRESERVING DOCX→HTML CONVERTER ──────────────────────
+def _docx_to_html_preserve_layout(docx_bytes: bytes) -> str:
+    """
+    Convert DOCX to HTML preserving table column widths, page margins, 
+    and text formatting.  Uses python-docx directly instead of mammoth.
+    
+    Key improvements over mammoth:
+    - Reads tblGrid for exact column widths → <col style="width:X%">
+    - Reads section margins → @page CSS
+    - Uses table-layout:fixed so xhtml2pdf respects column widths
+    - Handles colspan (gridSpan) and vMerge
+    - Compact spacing to match original page count
+    """
+    from docx import Document
+    from docx.oxml.ns import qn
+    import io as _io
+    import html as _html
+
+    doc = Document(_io.BytesIO(docx_bytes))
+
+    # ── Page Setup ──────────────────────────────────────────────
+    section = doc.sections[0]
+
+    def emu_to_cm(val):
+        """EMU → centimetres (1 cm = 360 000 EMU)."""
+        return round(int(val) / 360000, 2) if val else 2.0
+
+    mt = emu_to_cm(section.top_margin)
+    mr = emu_to_cm(section.right_margin)
+    mb = emu_to_cm(section.bottom_margin)
+    ml = emu_to_cm(section.left_margin)
+
+    # ── Helpers ─────────────────────────────────────────────────
+    def runs_to_html(paragraph):
+        """Convert paragraph runs to HTML with bold/italic."""
+        parts = []
+        for run in paragraph.runs:
+            text = run.text or ''
+            if not text:
+                continue
+            text = _html.escape(text).replace('\n', '<br/>')
+            if run.bold and run.italic:
+                text = f'<b><i>{text}</i></b>'
+            elif run.bold:
+                text = f'<b>{text}</b>'
+            elif run.italic:
+                text = f'<i>{text}</i>'
+            parts.append(text)
+        result = ''.join(parts)
+        # Fallback: paragraph.text catches text inside hyperlinks / bookmarks
+        if not result.strip() and paragraph.text.strip():
+            result = _html.escape(paragraph.text)
+        return result
+
+    def align_css(para):
+        """Return CSS text-align for a paragraph's alignment."""
+        try:
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            a = para.alignment
+            if a == WD_ALIGN_PARAGRAPH.CENTER:
+                return 'text-align:center;'
+            elif a == WD_ALIGN_PARAGRAPH.RIGHT:
+                return 'text-align:right;'
+            elif a == WD_ALIGN_PARAGRAPH.JUSTIFY:
+                return 'text-align:justify;'
+        except Exception:
+            pass
+        return ''
+
+    def cell_to_html(cell):
+        """Render all paragraphs inside a table cell."""
+        parts = []
+        for para in cell.paragraphs:
+            content = runs_to_html(para)
+            if content.strip():
+                a = align_css(para)
+                s = f' style="{a}"' if a else ''
+                parts.append(f'<p{s}>{content}</p>')
+        return ''.join(parts) or '&nbsp;'
+
+    def table_has_borders(tbl_el):
+        """Check if <w:tbl> has visible borders defined."""
+        tbl_pr = tbl_el.find(qn('w:tblPr'))
+        if tbl_pr is None:
+            return True  # default: bordered
+        borders = tbl_pr.find(qn('w:tblBorders'))
+        if borders is None:
+            return False
+        for tag in ('w:top', 'w:left', 'w:bottom', 'w:right',
+                    'w:insideH', 'w:insideV'):
+            b = borders.find(qn(tag))
+            if b is not None:
+                val = b.get(qn('w:val'), 'none')
+                if val not in ('none', 'nil'):
+                    return True
+        return False
+
+    def table_to_html(table):
+        """Convert python-docx Table → HTML with column widths and row heights."""
+        tbl = table._tbl
+
+        # ── Column widths from <w:tblGrid> ──
+        widths = []
+        grid = tbl.find(qn('w:tblGrid'))
+        if grid is not None:
+            for col in grid.findall(qn('w:gridCol')):
+                w = col.get(qn('w:w'))
+                widths.append(int(w) if w else 0)
+
+        total = sum(widths) or 1
+        pcts = [round(w / total * 100, 1) for w in widths]
+
+        bordered = table_has_borders(tbl)
+        border_css = 'border:0.5pt solid #000;' if bordered else 'border:none;'
+
+        out = [f'<table style="{border_css}">']
+
+        # <colgroup> for fixed column widths
+        if pcts:
+            out.append('<colgroup>')
+            for p in pcts:
+                out.append(f'<col style="width:{p}%"/>')
+            out.append('</colgroup>')
+
+        for row_idx, row in enumerate(table.rows):
+            tr = row._tr
+
+            # ── Row height from DOCX ──
+            tr_pr = tr.find(qn('w:trPr'))
+            row_height_twips = None
+            if tr_pr is not None:
+                tr_h = tr_pr.find(qn('w:trHeight'))
+                if tr_h is not None:
+                    val = tr_h.get(qn('w:val'))
+                    if val:
+                        row_height_twips = int(val)
+
+            # ── Check if row is empty ──
+            all_empty = all(not c.text.strip() for c in row.cells)
+
+            # Build <tr> with height hints
+            tr_style = ''
+            if all_empty:
+                # Empty spacer row → compact height (visible but saves vertical space)
+                tr_style = ' style="font-size:2pt;line-height:6pt;"'
+            elif row_height_twips:
+                # Explicit height from DOCX (twips → pt, 1 twip = 1/20 pt)
+                h_pt = round(row_height_twips / 20, 1)
+                tr_style = f' style="height:{h_pt}pt;"'
+
+            out.append(f'<tr{tr_style}>')
+            seen = set()
+            col_idx = 0
+            for cell in row.cells:
+                tc = cell._tc
+                if id(tc) in seen:
+                    col_idx += 1
+                    continue
+                seen.add(id(tc))
+
+                # ── colspan (gridSpan) ──
+                tc_pr = tc.find(qn('w:tcPr'))
+                colspan = 1
+                if tc_pr is not None:
+                    gs = tc_pr.find(qn('w:gridSpan'))
+                    if gs is not None:
+                        colspan = int(gs.get(qn('w:val'), '1'))
+
+                # ── vMerge: continuation cell → render empty ──
+                skip = False
+                if tc_pr is not None:
+                    vm = tc_pr.find(qn('w:vMerge'))
+                    if vm is not None and vm.get(qn('w:val')) is None:
+                        skip = True
+
+                content = '&nbsp;' if skip else cell_to_html(cell)
+                if all_empty:
+                    content = ''  # No &nbsp; for spacer rows
+
+                # Build <td> attributes
+                td_styles = []
+                if bordered:
+                    td_styles.append(border_css)
+                # Put width on first-row <td> for maximum xhtml2pdf compatibility
+                if row_idx == 0 and col_idx < len(pcts):
+                    td_styles.append(f'width:{pcts[col_idx]}%;')
+                if all_empty:
+                    td_styles.append('padding:0;')
+
+                attrs = f' colspan="{colspan}"' if colspan > 1 else ''
+                style_attr = f' style="{" ".join(td_styles)}"' if td_styles else ''
+                out.append(f'<td{attrs}{style_attr}>{content}</td>')
+                col_idx += colspan
+
+            out.append('</tr>')
+        out.append('</table>')
+        return '\n'.join(out)
+
+    # ── Iterate body elements in document order ────────────────
+    html_parts = []
+    para_map = {id(p._element): p for p in doc.paragraphs}
+    tbl_map = {id(t._element): t for t in doc.tables}
+
+    for child in doc.element.body:
+        tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+
+        if tag == 'p':
+            para = para_map.get(id(child))
+            if para:
+                content = runs_to_html(para)
+                if content.strip():
+                    a = align_css(para)
+                    s = f' style="{a}"' if a else ''
+                    html_parts.append(f'<p{s}>{content}</p>')
+                # Skip empty paragraphs to save vertical space
+
+        elif tag == 'tbl':
+            tbl_obj = tbl_map.get(id(child))
+            if tbl_obj:
+                html_parts.append(table_to_html(tbl_obj))
+
+    body = '\n'.join(html_parts)
+
+    # ── Assemble complete HTML ─────────────────────────────────
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8">
+<style>
+@page {{ size: A4; margin: {mt}cm {mr}cm {mb}cm {ml}cm; }}
+body {{
+    font-family: "LiberationSans", "Arial", "Helvetica", sans-serif;
+    font-size: 10pt;
+    line-height: 1.15;
+    color: #000;
+    margin: 0;
+    padding: 0;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin: 2pt 0;
+}}
+td, th {{
+    padding: 1pt 3pt;
+    vertical-align: top;
+    font-size: 10pt;
+    font-family: "LiberationSans", "Arial", sans-serif;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}}
+p {{ margin: 0; padding: 0; }}
+b, strong {{ font-weight: bold; }}
+i, em {{ font-style: italic; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
 # ─── CORE FUNCTIONS ──────────────────────────────────────────────
 def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     """
@@ -350,16 +613,25 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         else:
             logger.warning(f'No Turkish-compatible fonts found at {_fonts_dir}')
         
-        logger.info('Converting DOCX→HTML via mammoth...')
-        result = mammoth.convert_to_html(_io.BytesIO(docx_bytes))
-        html_body = result.value
+        # ── Try layout-preserving converter first (preserves column widths & margins) ──
+        full_html = None
+        try:
+            full_html = _docx_to_html_preserve_layout(docx_bytes)
+            logger.info('Custom layout-preserving DOCX->HTML converter succeeded')
+        except Exception as layout_exc:
+            logger.warning(f'Custom layout converter failed, falling back to mammoth: {layout_exc}')
         
-        if result.messages:
-            for msg in result.messages[:5]:
-                logger.info(f'mammoth message: {msg}')
-        
-        # Wrap with proper HTML structure and CSS for Turkish text & tables
-        full_html = f"""<!DOCTYPE html>
+        if full_html is None:
+            # Fallback: mammoth (strips layout info but always works)
+            logger.info('Converting DOCX->HTML via mammoth (fallback)...')
+            result = mammoth.convert_to_html(_io.BytesIO(docx_bytes))
+            html_body = result.value
+            
+            if result.messages:
+                for msg in result.messages[:5]:
+                    logger.info(f'mammoth message: {msg}')
+            
+            full_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
@@ -391,9 +663,6 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         background-color: #f0f0f0;
         font-weight: bold;
     }}
-    h1 {{ font-size: 16pt; margin: 12pt 0 6pt 0; }}
-    h2 {{ font-size: 14pt; margin: 10pt 0 5pt 0; }}
-    h3 {{ font-size: 12pt; margin: 8pt 0 4pt 0; }}
     p {{ margin: 3pt 0; }}
     strong {{ font-weight: bold; }}
     em {{ font-style: italic; }}
@@ -417,7 +686,7 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
             logger.warning(f'xhtml2pdf had errors: {pisa_status.err}')
         
         pdf_bytes = pdf_buffer.getvalue()
-        logger.info(f'mammoth+xhtml2pdf conversion succeeded, PDF size: {len(pdf_bytes)} bytes')
+        logger.info(f'DOCX->HTML->PDF conversion succeeded, PDF size: {len(pdf_bytes)} bytes')
         
         if len(pdf_bytes) > 500:
             return pdf_bytes
@@ -582,7 +851,7 @@ def _load_pdf_generator_cls():
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint (no auth required)"""
-    return jsonify({'status': 'ok', 'service': 'mini-udf-service', 'version': '2.2-dejavu'}), 200
+    return jsonify({'status': 'ok', 'service': 'mini-udf-service', 'version': '2.3-layout'}), 200
 
 
 @app.route('/diagnostic/libreoffice', methods=['GET'])
