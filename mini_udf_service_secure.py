@@ -421,7 +421,8 @@ def _docx_to_pdf_via_udf(docx_bytes: bytes) -> bytes:
         from tools.udf_extract_to_json import decode_cdata_bytes_with_meta
         
         # Create minimal UDF bytes with content
-        content_xml = f'<?xml version="1.0" encoding="UTF-8"?><Document><Content><![CDATA[{"\\n".join(paragraphs)}]]></Content></Document>'
+        joined = "\n".join(paragraphs)
+        content_xml = f'<?xml version="1.0" encoding="UTF-8"?><Document><Content><![CDATA[{joined}]]></Content></Document>'
         
         udf_buffer = io.BytesIO()
         with zipfile.ZipFile(udf_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
