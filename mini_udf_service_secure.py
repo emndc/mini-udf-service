@@ -291,7 +291,9 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
             # Try LibreOffice first (Render production)
             soffice = shutil.which('soffice')
             if soffice:
+                logger.info(f'Found soffice at: {soffice}')
                 try:
+                    logger.info(f'Running LibreOffice conversion: {docx_path} → {pdf_path}')
                     result = subprocess.run(
                         [soffice, '--headless', '--convert-to', 'pdf',
                          '--outdir', tmpdir, docx_path],
@@ -300,11 +302,21 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
                         stderr=subprocess.PIPE,
                         timeout=30
                     )
+                    logger.info(f'LibreOffice exit code: {result.returncode}')
+                    logger.info(f'LibreOffice stdout: {result.stdout.decode("utf-8", errors="ignore")}')
+                    if result.stderr:
+                        logger.warning(f'LibreOffice stderr: {result.stderr.decode("utf-8", errors="ignore")}')
+                    
                     if os.path.exists(pdf_path):
-                        logger.info(f'LibreOffice conversion succeeded, PDF size: {os.path.getsize(pdf_path)}')
+                        pdf_size = os.path.getsize(pdf_path)
+                        logger.info(f'✅ LibreOffice conversion succeeded, PDF size: {pdf_size} bytes')
                         return Path(pdf_path).read_bytes()
+                    else:
+                        logger.warning(f'LibreOffice ran but output PDF not found at: {pdf_path}')
+                except subprocess.TimeoutExpired as timeout_exc:
+                    logger.error(f'LibreOffice conversion timeout: {timeout_exc}')
                 except Exception as exc:
-                    logger.warning(f'LibreOffice conversion failed: {exc}')
+                    logger.error(f'LibreOffice conversion exception: {type(exc).__name__}: {exc}')
             
             # Fallback: Try DOCX→UDF→PDF (UYAP style)
             logger.info('Falling back to UDF→PDF conversion')
