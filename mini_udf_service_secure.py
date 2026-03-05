@@ -289,33 +289,66 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.lib.fonts import addMapping as rl_addMapping
         
-        # Register DejaVu Sans with ReportLab (Turkish character support)
+        # Register Liberation Sans (Arial-compatible) with ReportLab for Turkish chars
         _fonts_dir = Path(__file__).resolve().parent / 'fonts'
-        _font_regular = _fonts_dir / 'DejaVuSans.ttf'
-        _font_bold = _fonts_dir / 'DejaVuSans-Bold.ttf'
+        _lib_regular = _fonts_dir / 'LiberationSans-Regular.ttf'
+        _lib_bold = _fonts_dir / 'LiberationSans-Bold.ttf'
+        _lib_italic = _fonts_dir / 'LiberationSans-Italic.ttf'
+        _lib_bold_italic = _fonts_dir / 'LiberationSans-BoldItalic.ttf'
+        # DejaVu Sans as secondary fallback
+        _dv_regular = _fonts_dir / 'DejaVuSans.ttf'
+        _dv_bold = _fonts_dir / 'DejaVuSans-Bold.ttf'
         
-        if _font_regular.exists() and _font_bold.exists():
+        if _lib_regular.exists() and _lib_bold.exists():
             try:
-                pdfmetrics.registerFont(TTFont('DejaVuSans', str(_font_regular)))
-                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', str(_font_bold)))
+                pdfmetrics.registerFont(TTFont('LiberationSans', str(_lib_regular)))
+                pdfmetrics.registerFont(TTFont('LiberationSans-Bold', str(_lib_bold)))
+                pdfmetrics.registerFont(TTFont('LiberationSans-Italic', str(_lib_italic)))
+                pdfmetrics.registerFont(TTFont('LiberationSans-BoldItalic', str(_lib_bold_italic)))
+                rl_addMapping('LiberationSans', 0, 0, 'LiberationSans')
+                rl_addMapping('LiberationSans', 1, 0, 'LiberationSans-Bold')
+                rl_addMapping('LiberationSans', 0, 1, 'LiberationSans-Italic')
+                rl_addMapping('LiberationSans', 1, 1, 'LiberationSans-BoldItalic')
+                # Map all common font names to Liberation Sans (= Arial metrics)
+                for key in ('helvetica', 'helvetica-bold', 'helvetica-oblique',
+                            'helvetica-boldoblique', 'arial', 'sans', 'sansserif',
+                            'verdana', 'geneva', 'liberationsans'):
+                    if 'bold' in key and 'oblique' in key:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans-BoldItalic'
+                    elif 'bold' in key:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans-Bold'
+                    elif 'oblique' in key or 'italic' in key:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans-Italic'
+                    else:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans'
+                # Also map serif/times to Liberation Sans for consistency
+                for key in ('serif', 'times', 'times-roman', 'times-bold',
+                            'times-boldoblique', 'times-oblique', 'times new roman'):
+                    if 'bold' in key:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans-Bold'
+                    else:
+                        xhtml2pdf.default.DEFAULT_FONT[key] = 'LiberationSans'
+                logger.info(f'Liberation Sans (Arial-compatible) fonts registered from {_fonts_dir}')
+            except Exception as font_exc:
+                logger.warning(f'Font registration failed (may already be registered): {font_exc}')
+        elif _dv_regular.exists() and _dv_bold.exists():
+            try:
+                pdfmetrics.registerFont(TTFont('DejaVuSans', str(_dv_regular)))
+                pdfmetrics.registerFont(TTFont('DejaVuSans-Bold', str(_dv_bold)))
                 rl_addMapping('DejaVuSans', 0, 0, 'DejaVuSans')
                 rl_addMapping('DejaVuSans', 1, 0, 'DejaVuSans-Bold')
                 rl_addMapping('DejaVuSans', 0, 1, 'DejaVuSans')
                 rl_addMapping('DejaVuSans', 1, 1, 'DejaVuSans-Bold')
-                # Override xhtml2pdf default font mappings
-                for key in ('helvetica', 'helvetica-bold', 'arial', 'sans',
-                            'sansserif', 'serif', 'times', 'times-roman',
-                            'times-bold', 'verdana', 'geneva'):
+                for key in list(xhtml2pdf.default.DEFAULT_FONT.keys()):
                     if 'bold' in key:
                         xhtml2pdf.default.DEFAULT_FONT[key] = 'DejaVuSans-Bold'
                     else:
                         xhtml2pdf.default.DEFAULT_FONT[key] = 'DejaVuSans'
-                xhtml2pdf.default.DEFAULT_FONT['dejavusans'] = 'DejaVuSans'
-                logger.info(f'DejaVu Sans fonts registered from {_fonts_dir}')
+                logger.info(f'DejaVu Sans fallback fonts registered from {_fonts_dir}')
             except Exception as font_exc:
-                logger.warning(f'Font registration failed (may already be registered): {font_exc}')
+                logger.warning(f'Fallback font registration failed: {font_exc}')
         else:
-            logger.warning(f'DejaVu Sans fonts not found at {_fonts_dir}')
+            logger.warning(f'No Turkish-compatible fonts found at {_fonts_dir}')
         
         logger.info('Converting DOCX→HTML via mammoth...')
         result = mammoth.convert_to_html(_io.BytesIO(docx_bytes))
@@ -336,9 +369,9 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
         margin: 2cm;
     }}
     body {{
-        font-family: "DejaVuSans", "Helvetica", "Arial", sans-serif;
-        font-size: 11pt;
-        line-height: 1.4;
+        font-family: "LiberationSans", "Arial", "Helvetica", sans-serif;
+        font-size: 10pt;
+        line-height: 1.3;
         color: #000;
     }}
     table {{
@@ -348,10 +381,11 @@ def docx_to_pdf_bytes(docx_bytes: bytes) -> bytes:
     }}
     td, th {{
         border: 1px solid #333;
-        padding: 4pt 6pt;
+        padding: 3pt 5pt;
         text-align: left;
         vertical-align: top;
         font-size: 10pt;
+        font-family: "LiberationSans", "Arial", sans-serif;
     }}
     th {{
         background-color: #f0f0f0;
